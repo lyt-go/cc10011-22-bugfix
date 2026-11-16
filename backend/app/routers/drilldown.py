@@ -48,6 +48,20 @@ def create_entry(payload: EntryPayload) -> ActionResult:
     return ActionResult(ok=True, message="下钻路径已登记", entry=entry)
 
 
+@router.post("/{entry_id}/snapshot", response_model=ActionResult)
+def apply_snapshot(entry_id: int, payload: EntryPayload) -> ActionResult:
+    """下钻路径消费筛选条件快照：只挂快照编号，不复制预设条件文本。"""
+    snapshot_id = payload.values.get("snapshot_id") or payload.values.get("筛选快照编号")
+    try:
+        snapshot_id = int(snapshot_id)
+    except (TypeError, ValueError):
+        return ActionResult(ok=False, message="缺少有效的筛选快照编号 snapshot_id")
+    entry, message = service.apply_snapshot(entry_id, snapshot_id)
+    if entry is None:
+        return ActionResult(ok=False, message=message)
+    return ActionResult(ok=True, message=message, entry=entry)
+
+
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     """对单条下钻路径执行提交路径评审、启用路径、归档路径；不允许的动作会被拦下并说明原因。"""

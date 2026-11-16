@@ -75,5 +75,40 @@ npm run dev
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
 
+## 筛选预设的保存、套用与快照
+
+筛选预设把「保存 → 评审 → 发布 → 套用」串成一条数据流，所有规则都在
+`backend/app/services/filterpreset.py`：
+
+- **保存不丢字段**：新建/修改会一并保存时间范围、排序规则（`显示顺序` 别名）、
+  显示列、共享状态和发布状态，`使用次数` 由系统维护、不可外部写入。
+- **发布状态只能流转**：`草稿 → 预设评审中 → 已发布 → 已废弃`；直接改状态会被拒绝，
+  重复执行同一动作是幂等的。已发布预设修改条件会回落到评审中，重新发布才递增版本。
+- **条件完整解析**：`维度条件组` 支持 JSON 数组、`{"conditions": [...]}` 和
+  `区域=华东;渠道 in [线上,APP]` 文本写法，解析时保留全部条件（不会只取第一个）。
+- **套用与快照**：只有已发布预设可套用；套用时生成不可变的筛选条件数据快照
+  (`SNAP-xxxx`)，包含有效条件、失效维度、显示列、时间范围、预设版本、使用次数和幂等键。
+  失效维度只记录不参与查询，显示列同理。
+- **使用次数不虚增**：只有成功套用才计数；同一 `request_id` 重复刷新返回原快照，
+  不重复累加；回看旧快照（`snapshot_id`）也不计数。已废弃预设不能再套用，
+  但历史快照仍可只读回看。
+- **上游依赖**：生成快照前需要预设模板、维度条件组、时间范围记录就绪；依赖按提交顺序
+  校验，每类只采纳首个通过的记录，被跳过的记录原因写在快照的 `依赖跳过` 里。
+- **下游消费**：多维下钻通过 `POST /api/drilldown/{id}/snapshot` 消费快照，只记录
+  `筛选快照编号`，不复制条件文本，也不回写预设使用次数。
+
+主要接口：`GET/POST /api/filterpreset`、`PUT /api/filterpreset/{id}`、
+`GET /api/filterpreset/{id}`（详情）、`POST /api/filterpreset/{id}/apply`、
+`GET /api/filterpreset/snapshots[/{snapshot_id}]`、`GET /api/filterpreset/usage`。
+
+## 测试
+
+```bash
+cd backend
+.venv/bin/pip install pytest httpx
+.venv/bin/python -m pytest tests -q
+```
+
+
 领域：数据工程
 子方向：数据分析与数据应用

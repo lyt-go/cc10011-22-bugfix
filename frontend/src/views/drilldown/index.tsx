@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { request } from '@/api/client'
 
 const ENDPOINT = '/api/drilldown'
+const FILTER_PRESET_ENDPOINT = '/api/filterpreset'
 const columns = [
   "路径编号",
   "起始维度",
@@ -40,13 +41,31 @@ const stats = [
 ]
 
 type Row = Record<string, string | number | null>
+type SnapshotOption = { id: number; 快照编号: string; 预设编号: string; 预设名称: string }
+type SnapshotResult = {
+  快照编号?: string
+  有效条件?: { 维度: string; 操作符: string; 值: unknown }[]
+  失效维度?: { 维度: string }[]
+  显示列?: string[]
+  时间范围?: string
+}
 
 export default function DrilldownView() {
   const [rows, setRows] = useState<Row[]>([])
   const [total, setTotal] = useState(0)
   const [errorMessage, setErrorMessage] = useState('')
   const [filters, setFilters] = useState<Record<string, string>>({})
+  const [snapshots, setSnapshots] = useState<SnapshotOption[]>([])
+  const [selectedSnapshot, setSelectedSnapshot] = useState('')
+  const [snapshotResult, setSnapshotResult] = useState<SnapshotResult | null>(null)
   const filterFields = useMemo(() => columns.slice(0, 3), [])
+
+  useEffect(() => {
+    request(`${FILTER_PRESET_ENDPOINT}/snapshots`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => setSnapshots(payload?.items ?? []))
+      .catch(() => undefined)
+  }, [])
 
   const reload = useCallback(async () => {
     setErrorMessage('')
@@ -67,6 +86,25 @@ export default function DrilldownView() {
   useEffect(() => {
     void reload()
   }, [reload])
+
+  async function attachSnapshot(row: Row) {
+    setErrorMessage('')
+    setSnapshotResult(null)
+    try {
+      const response = await request(`${ENDPOINT}/${row.id}/snapshot`, {
+        method: 'POST',
+        body: JSON.stringify({ values: { snapshot_id: Number(selectedSnapshot) } }),
+      })
+      const payload = await response.json()
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.message ?? '筛选条件快照挂载失败')
+      }
+      setSnapshotResult(payload.entry ?? null)
+      await reload()
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '筛选条件快照挂载失败')
+    }
+  }
 
   async function runAction(action: string, row: Row) {
     setErrorMessage('')
@@ -121,6 +159,15 @@ export default function DrilldownView() {
             />
           </label>
         ))}
+        <label className="filter-item">
+          <span>筛选条件快照</span>
+          <select value={selectedSnapshot} onChange={(event) => setSelectedSnapshot(event.target.value)}>
+            <option value="">选择快照</option>
+            {snapshots.map((item) => (
+              <option key={item.id} value={item.id}>{item.快照编号} · {item.预设编号} {item.预设名称}</option>
+            ))}
+          </select>
+        </label>
         <button className="btn" type="submit">查询</button>
         <button className="btn ghost" type="button" onClick={() => setFilters({})}>重置条件</button>
       </form>
@@ -129,6 +176,7 @@ export default function DrilldownView() {
         <thead>
           <tr>
             {columns.map((column) => <th key={column}>{column}</th>)}
+            <th>筛选快照</th>
             <th>可执行动作</th>
           </tr>
         </thead>
@@ -136,7 +184,17 @@ export default function DrilldownView() {
           {rows.map((row) => (
             <tr key={String(row.id)}>
               {columns.map((column) => <td key={column}>{row[column] ?? '—'}</td>)}
+              <td>{row.筛选快照编号 ?? '—'}</td>
               <td className="row-actions">
+                <button
+                  className="link"
+                  type="button"
+                  disabled={!selectedSnapshot}
+                  title={selectedSnapshot ? '把快照挂到该路径' : '先选择筛选条件快照'}
+                  onClick={() => void attachSnapshot(row)}
+                >
+                  挂载快照
+                </button>
                 {actions.map((action) => (
                   <button key={action} className="link" type="button" onClick={() => void runAction(action, row)}>
                     {action}
@@ -147,11 +205,38 @@ export default function DrilldownView() {
           ))}
           {rows.length === 0 && (
             <tr>
-              <td className="empty-state" colSpan={columns.length + 1}>暂无多维下钻数据，可先登记下钻路径</td>
+              <td className="empty-state" colSpan={columns.length + 2}>暂无多维下钻数据，可先登记下钻路径</td>
             </tr>
           )}
         </tbody>
       </table>
+
+      {snapshotResult && (
+        <section className="panel">
+          <header className="panel-head">
+            <h3>已挂载的筛选条件快照：{snapshotResult.快照编号}</h3>
+            <button className="btn ghost" type="button" onClick={() => setSnapshotResult(null)}>关闭</button>
+          </header>
+          <dl className="detail-grid">
+            <div><dt>时间范围</dt><dd>{snapshotResult.时间范围 ?? '—'}</dd></div>
+            <div><dt>显示列</dt><dd>{(snapshotResult.显示列 ?? []).join('、') || '—'}</dd></div>
+            <div><dt>失效维度</dt><dd>{(snapshotResult.失效维度 ?? []).map((item) => item.维度).join('、') || '无'}</dd></div>
+          </dl>
+          <h4>套用条件（{(snapshotResult.有效条件 ?? []).length} 条）</h4>
+          <table className="data-table compact">
+            <thead><tr><th>维度</th><th>操作符</th><th>值</th></tr></thead>
+            <tbody>
+              {(snapshotResult.有效条件 ?? []).map((condition, index) => (
+                <tr key={`${condition.维度}-${index}`}>
+                  <td>{condition.维度}</td>
+                  <td>{condition.操作符}</td>
+                  <td>{Array.isArray(condition.值) ? condition.值.join('、') : String(condition.值 ?? '')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
 
       <footer className="page-foot">
         <span>共 {total} 条多维下钻记录</span>

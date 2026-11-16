@@ -14,12 +14,28 @@ class Store:
         self._tables: dict[str, list[dict[str, Any]]] = {
             name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()
         }
+        # 附属数据表（快照、使用记录等）不参与模块总览统计，单独挂在 aux 里。
+        # 真实项目里换成独立的数据访问对象即可，这里保持标准库实现。
+        self._aux_tables: dict[str, list[dict[str, Any]]] = {
+            "filterpreset_snapshots": [],
+            "filterpreset_usage": [],
+        }
 
     def module_names(self) -> list[str]:
         return sorted(self._tables)
 
     def rows(self, module: str) -> list[dict[str, Any]]:
         return self._tables.setdefault(module, [])
+
+    def aux_rows(self, table: str) -> list[dict[str, Any]]:
+        return self._aux_tables.setdefault(table, [])
+
+    def next_id(self, table: str) -> int:
+        if table in self._aux_tables:
+            rows = self.aux_rows(table)
+        else:
+            rows = self.rows(table)
+        return max((int(row.get("id", 0)) for row in rows), default=0) + 1
 
     def find(self, module: str, entry_id: int) -> dict[str, Any] | None:
         for row in self.rows(module):
